@@ -726,23 +726,15 @@ document.getElementById('tpl-load').addEventListener('change',function(){if(!thi
 document.getElementById('tpl-del').addEventListener('click',function(){var sel=document.getElementById('tpl-load');if(!sel.value)return;if(!confirm('Удалить шаблон "'+sel.value+'"?'))return;var t=getTpls();delete t[sel.value];saveTpls(t);refreshSel()});
 
 /* ═══════ SIGNALS ═══════ */
-var SIGNALS=[
-  {id:1,game:'genshin',platform:'funpay',title:'AR 58 | Нахида + Фурина + Райдэн + Кадзуха | 22000 примогемов',price:1200,oldPrice:1800,url:'https://funpay.com/lots/696/',time:2},
-  {id:2,game:'hsr',platform:'funpay',title:'TL 65 | Кафка + Ахерон + Робин + Авентурин | 15000 нефрита',price:900,oldPrice:1400,url:'https://funpay.com/lots/696/',time:8},
-  {id:3,game:'wuwa',platform:'playerok',title:'UL 55 | Карлотта + Камельотт + Кантарелла | 8000 астритов',price:700,oldPrice:1100,url:'https://playerok.com/',time:15},
-  {id:4,game:'genshin',platform:'funpay',title:'AR 56 | Фурина + Нахида + Ган Юй | 45000 примогемов | Автовыдача',price:1800,oldPrice:2500,url:'https://funpay.com/lots/696/',time:23},
-  {id:5,game:'hsr',platform:'funpay',title:'TL 60 | Серебряный Волк + Блэйд + Зеле | 12000 нефрита',price:650,oldPrice:950,url:'https://funpay.com/lots/696/',time:37},
-  {id:6,game:'genshin',platform:'funpay',title:'AR 35 | Нёвиллет + Навия | 18000 примогемов | Дёшево',price:280,oldPrice:500,url:'https://funpay.com/lots/696/',time:48},
-  {id:7,game:'genshin',platform:'playerok',title:'AR 50 | Мавука + Цитлали + Е Лань + Ху Тао | Бездна 36★',price:1500,oldPrice:2200,url:'https://playerok.com/',time:55},
-  {id:8,game:'wuwa',platform:'funpay',title:'UL 50 | Цзяньсинь + Вэйлинай + Рокиа | Свежий аккаунт',price:300,oldPrice:550,url:'https://funpay.com/lots/696/',time:62},
-  {id:9,game:'hsr',platform:'playerok',title:'TL 70 | Касторика + Трибби + Файрфлай + Ахерон | 25000 нефрита',price:2800,oldPrice:4200,url:'https://playerok.com/',time:70},
-  {id:10,game:'genshin',platform:'funpay',title:'AR 60 | 18 персонажей 5★ | Райдэн C2 | Полный контент',price:3200,oldPrice:4800,url:'https://funpay.com/lots/696/',time:85},
-];
+var SIGNALS=[];
 
-/* Try to load real data from signals.json (created by parser) */
+/* Load real data from signals.json (created by parser) */
 fetch('signals.json').then(r=>r.ok?r.json():null).then(data=>{
-  if(data&&data.length){SIGNALS.length=0;data.forEach(d=>SIGNALS.push(d));renderSignals()}
-}).catch(()=>{});
+  if(data&&data.length){SIGNALS=data;renderSignals()}
+  else{document.getElementById('sig-feed').innerHTML='<div class="sig-empty">Парсер ещё не нашёл выгодных лотов. Данные обновляются каждые 15 минут.</div>'}
+}).catch(()=>{
+  document.getElementById('sig-feed').innerHTML='<div class="sig-empty">Парсер ещё не запущен или не нашёл данных. Запустите парсер через GitHub Actions.</div>';
+});
 
 var sigFilter='all';
 document.querySelectorAll('#sig-filters .sig-filter').forEach(b=>b.addEventListener('click',function(){
@@ -781,22 +773,12 @@ function renderSignals(){
 }
 renderSignals();
 
-/* simulate new deal every 25s */
+/* Auto-refresh signals every 5 minutes */
 setInterval(function(){
-  var games=['genshin','hsr','wuwa'],plats=['funpay','playerok'];
-  var g=R(games),p=R(plats);
-  var names={genshin:['Нахида','Фурина','Райдэн','Кадзуха','Е Лань','Нёвиллет','Мавука','Цитлали','Ху Тао','Аяка'],hsr:['Кафка','Ахерон','Робин','Файрфлай','Касторика','Трибби','Авентурин','Зеле'],wuwa:['Карлотта','Камельотт','Кантарелла','Цзяньсинь','Вэйлинай']};
-  var rkN={genshin:'AR',hsr:'TL',wuwa:'UL'},curN={genshin:'примогемов',hsr:'нефрита',wuwa:'астритов'};
-  var urls={funpay:'https://funpay.com/lots/696/',playerok:'https://playerok.com/'};
-  var ch=SF(names[g]).slice(0,Math.floor(Math.random()*3)+2);
-  var ar=Math.floor(Math.random()*25)+35,primo=Math.floor(Math.random()*40+5)*1000;
-  var price=Math.floor(Math.random()*2500+200),oldP=Math.floor(price*(1.3+Math.random()*.4)+100);
-  var title=rkN[g]+' '+ar+' | '+ch.join(' + ')+' | '+primo.toLocaleString('ru')+' '+curN[g];
-  SIGNALS.unshift({id:Date.now(),game:g,platform:p,title:title,price:price,oldPrice:oldP,url:urls[p],time:0});
-  if(SIGNALS.length>25)SIGNALS.pop();
-  SIGNALS.forEach(s=>s.time+=Math.floor(Math.random()*4)+1);
-  renderSignals();
-},25000);
+  fetch('signals.json').then(r=>r.ok?r.json():null).then(data=>{
+    if(data&&data.length){SIGNALS=data;renderSignals()}
+  }).catch(()=>{});
+},300000);
 
 /* Init generation counter */
 var gcInit=parseInt(localStorage.getItem('narius_gc')||'0');
