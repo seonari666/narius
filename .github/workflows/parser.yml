@@ -1,0 +1,25 @@
+name: Parse FunPay
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  parse:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests beautifulsoup4
+      - run: python parser.py
+      - run: |
+          git config user.name "Narius Bot"
+          git config user.email "bot@narius.dev"
+          git add signals.json
+          git diff --quiet --cached || git commit -m "Update signals"
+          git push
