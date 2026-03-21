@@ -1,13 +1,10 @@
 """
-Narius Parser — парсер выгодных аккаунтов с FunPay
-Собирает лоты из категорий Genshin Impact / HSR / Wuthering Waves,
-находит выгодные предложения и сохраняет в signals.json
-
-Использование:
-  python parser.py
-
-Для автоматического запуска каждые 10 минут — используй GitHub Actions
-(см. README.md)
+Narius Parser v2 — умный парсер выгодных аккаунтов с FunPay
+- Фильтрует стартовые и чистые аккаунты (AR < 30)
+- Пропускает лоты с ценой 0
+- Извлекает AR из метаданных лота
+- Создаёт чистое название для сайта
+- Сохраняет прямые ссылки на лоты
 """
 
 import requests
@@ -17,89 +14,141 @@ import time
 from datetime import datetime
 from bs4 import BeautifulSoup
 
-# Категории на FunPay (аккаунты)
 CATEGORIES = {
-    "genshin": {
-        "url": "https://funpay.com/lots/696/",
-        "game": "genshin"
-    },
-    "hsr": {
-        "url": "https://funpay.com/lots/858/",
-        "game": "hsr"
-    },
-    "wuwa": {
-        "url": "https://funpay.com/lots/1162/",
-        "game": "wuwa"
-    }
+    "genshin": {"url": "https://funpay.com/lots/696/", "game": "genshin", "name": "Genshin Impact"},
+    "hsr": {"url": "https://funpay.com/lots/858/", "game": "hsr", "name": "Honkai: Star Rail"},
+    "wuwa": {"url": "https://funpay.com/lots/1162/", "game": "wuwa", "name": "Wuthering Waves"},
 }
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Accept-Language": "ru-RU,ru;q=0.9",
+    "Accept": "text/html,application/xhtml+xml",
 }
 
-# Средние цены для определения выгодности (обновляй по мере необходимости)
-AVG_PRICES = {
-    "genshin": 1500,
-    "hsr": 1200,
-    "wuwa": 800,
-}
+# Средние цены — лоты дешевле этого попадают в выдачу
+AVG_PRICES = {"genshin": 2000, "hsr": 1500, "wuwa": 1000}
+
+# Слова-фильтры: если есть в названии — пропускаем (не аккаунты)
+SKIP_WORDS = [
+    'стартовый', 'starter', 'чистый', 'clean', 'reroll',
+    'автовыдача карт', 'гайд', 'guide', 'boost', 'буст',
+    'фарм', 'farm', 'twitch', 'drops', 'донат', 'кристалл',
+    'crystal', 'genesis', 'прокачк', 'услуг', 'оптимизац',
+    'hwid', 'teleport', 'map', 'карта', 'мод', 'чит',
+]
+
+def clean_title(raw_title):
+    """Убирает лишние эмодзи и спецсимволы, оставляя читаемый текст."""
+    # Убираем декоративные юникод-символы
+    cleaned = re.sub(r'[⭐🔥💎✨🌟💗💖🎀⚡️🚀💥🌸🍀☀️🟢🟥🟧🟨🔷🔶⭕💜🤍❤️💙🌺🎲🍨⚫️🌈🎊🔮🦄📣🎴🉐💵🟦◻️💮🔆❄️🎈🌇♨️🏆📡✍️🌍💰🎖️🛡️🌙🎯📋📌📩🗑️💾⚙️🎀]+', '', raw_title)
+    # Убираем специальные обрамления
+    cleaned = re.sub(r'[【】「」『』〔〕▐█░▒▓║╔╗╚╝═─┌┐└┘│♥ﮩ٨ـ●◆▸•]', '', cleaned)
+    # Убираем множественные пробелы
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    # Убираем начальные/конечные спецсимволы
+    cleaned = re.sub(r'^[\s|,\-:]+|[\s|,\-:]+$', '', cleaned)
+    return cleaned if len(cleaned) > 5 else raw_title[:100]
+
+
+def extract_ar(text):
+    """Извлекает Adventure Rank / Trailblaze Level из текста."""
+    patterns = [
+        r'AR\s*(\d+)', r'ar\s*(\d+)',
+        r'TL\s*(\d+)', r'tl\s*(\d+)',
+        r'UL\s*(\d+)', r'ul\s*(\d+)',
+        r'(\d+)\s*AR', r'(\d+)\s*ar',
+        r'ранг\s*(\d+)', r'rank\s*(\d+)',
+    ]
+    for p in patterns:
+        m = re.search(p, text, re.IGNORECASE)
+        if m:
+            return int(m.group(1))
+    return 0
+
+
+def should_skip(title_lower):
+    """Проверяет нужно ли пропустить этот лот."""
+    return any(w in title_lower for w in SKIP_WORDS)
 
 
 def parse_category(name, config):
-    """Парсит одну категорию FunPay и возвращает список лотов."""
+    """Парсит одну категорию FunPay."""
     print(f"[*] Парсинг {name}: {config['url']}")
     lots = []
 
     try:
-        resp = requests.get(config["url"], headers=HEADERS, timeout=15)
+        resp = requests.get(config["url"], headers=HEADERS, timeout=20)
         resp.raise_for_status()
+        print(f"    HTTP {resp.status_code}, размер: {len(resp.text)} байт")
     except Exception as e:
-        print(f"[!] Ошибка при загрузке {name}: {e}")
+        print(f"[!] Ошибка загрузки {name}: {e}")
         return lots
 
     soup = BeautifulSoup(resp.text, "html.parser")
-
-    # FunPay использует div.tc-item для каждого лота
     items = soup.select("a.tc-item")
-    print(f"    Найдено {len(items)} лотов")
+    print(f"    Найдено {len(items)} элементов на странице")
 
     for item in items:
         try:
-            # Название лота
-            title_el = item.select_one(".tc-desc-text")
-            if not title_el:
+            # Название
+            desc_el = item.select_one(".tc-desc-text")
+            if not desc_el:
                 continue
-            title = title_el.get_text(strip=True)
+            raw_title = desc_el.get_text(strip=True)
 
-            # Цена
+            # Пропускаем по ключевым словам
+            if should_skip(raw_title.lower()):
+                continue
+
+            # Цена — ищем в разных местах
+            price = 0
             price_el = item.select_one(".tc-price div")
-            if not price_el:
-                continue
-            price_text = price_el.get_text(strip=True)
-            # Извлекаем число из цены (убираем ₽, пробелы и т.д.)
-            price_num = re.sub(r'[^\d.]', '', price_text.replace(',', '.'))
-            if not price_num:
-                continue
-            price = float(price_num)
+            if price_el:
+                price_text = price_el.get_text(strip=True)
+                nums = re.findall(r'[\d]+[.,]?\d*', price_text.replace(' ', ''))
+                if nums:
+                    price = float(nums[0].replace(',', '.'))
 
-            # Ссылка на лот
+            # Пропускаем бесплатные и слишком дешёвые (< 50 руб)
+            if price < 50:
+                continue
+
+            # Извлекаем AR из названия и метаданных
+            full_text = raw_title
+            # Также смотрим в доп. инфо лота
+            extra_els = item.select(".tc-desc div")
+            for el in extra_els:
+                full_text += " " + el.get_text(strip=True)
+
+            ar = extract_ar(full_text)
+
+            # Фильтр: пропускаем низкий AR (стартовые акки)
+            if ar > 0 and ar < 25:
+                continue
+
+            # Ссылка
             url = item.get("href", "")
             if url and not url.startswith("http"):
                 url = "https://funpay.com" + url
 
-            # Определяем выгодность — цена ниже средней
-            avg = AVG_PRICES.get(config["game"], 1000)
-            is_deal = price < avg
+            # Проверяем выгодность
+            avg = AVG_PRICES.get(config["game"], 1500)
+            if price > avg:
+                continue
 
-            if not is_deal:
-                continue  # Показываем только лоты дешевле средней цены
+            # Чистое название для сайта
+            clean = clean_title(raw_title)
+            if ar > 0:
+                display_title = f"AR {ar} | {clean}" if config["game"] == "genshin" else f"{'TL' if config['game']=='hsr' else 'UL'} {ar} | {clean}"
+            else:
+                display_title = clean
 
             lots.append({
-                "id": hash(url) % 1000000,
+                "id": abs(hash(url)) % 10000000,
                 "game": config["game"],
                 "platform": "funpay",
-                "title": title[:200],
+                "title": display_title[:200],
                 "price": int(price),
                 "oldPrice": int(avg),
                 "url": url,
@@ -107,14 +156,16 @@ def parse_category(name, config):
             })
 
         except Exception as e:
+            print(f"    [!] Ошибка обработки лота: {e}")
             continue
 
+    print(f"    Выгодных лотов: {len(lots)}")
     return lots
 
 
 def main():
     print("=" * 50)
-    print(f"Narius Parser — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Narius Parser v2 — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 50)
 
     all_signals = []
@@ -122,25 +173,27 @@ def main():
     for name, config in CATEGORIES.items():
         lots = parse_category(name, config)
         all_signals.extend(lots)
-        time.sleep(2)  # Пауза между запросами
+        time.sleep(3)
 
-    # Сортируем по цене (дешёвые сначала)
+    # Сортируем по цене
     all_signals.sort(key=lambda x: x["price"])
 
-    # Ограничиваем до 25 лотов
+    # Лимит 25
     all_signals = all_signals[:25]
 
-    # Добавляем время (минуты назад)
+    # Проставляем время
     for i, sig in enumerate(all_signals):
-        sig["time"] = i * 3 + 1
+        sig["time"] = i * 2 + 1
 
-    # Сохраняем в JSON
-    output_path = "signals.json"
-    with open(output_path, "w", encoding="utf-8") as f:
+    # Сохраняем
+    with open("signals.json", "w", encoding="utf-8") as f:
         json.dump(all_signals, f, ensure_ascii=False, indent=2)
 
-    print(f"\n[✓] Сохранено {len(all_signals)} выгодных лотов в {output_path}")
-    print("    Файл signals.json нужно положить рядом с narius.html")
+    print(f"\n{'=' * 50}")
+    print(f"[✓] Сохранено {len(all_signals)} лотов в signals.json")
+    if all_signals:
+        print(f"    Цены от {all_signals[0]['price']}₽ до {all_signals[-1]['price']}₽")
+    print("=" * 50)
 
 
 if __name__ == "__main__":
