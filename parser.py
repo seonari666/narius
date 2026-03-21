@@ -88,12 +88,12 @@ def parse_category(name, config):
             if url and not url.startswith("http"):
                 url = "https://funpay.com" + url
 
-            # Определяем выгодность — цена ниже 70% от средней
+            # Определяем выгодность — цена ниже средней
             avg = AVG_PRICES.get(config["game"], 1000)
-            is_deal = price < avg * 0.7
+            is_deal = price < avg
 
             if not is_deal:
-                continue  # Показываем только выгодные
+                continue  # Показываем только лоты дешевле средней цены
 
             lots.append({
                 "id": hash(url) % 1000000,
